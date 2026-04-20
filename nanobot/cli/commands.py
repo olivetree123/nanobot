@@ -1070,6 +1070,7 @@ def agent(
         tools_config=config.tools,
     )
     restart_notice = consume_restart_notice_from_env()
+    # 在cli模式下，重启后会显示通知消息
     if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):
         _print_agent_response(
             format_restart_completed_message(restart_notice.started_at_raw),
