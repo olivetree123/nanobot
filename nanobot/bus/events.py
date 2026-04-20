@@ -7,7 +7,10 @@ from typing import Any
 
 @dataclass
 class InboundMessage:
-    """Message received from a chat channel."""
+    """Message received from a chat channel.
+    
+    chat_id：聊天/频道标识符，同一个聊天/频道内的消息共享同一个 chat_id，客户端通常可以使用用户id或者群组id作为chat_id。
+    """
 
     channel: str  # telegram, discord, slack, whatsapp
     sender_id: str  # User identifier
@@ -34,5 +37,3 @@ class OutboundMessage:
     reply_to: str | None = None
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-
-

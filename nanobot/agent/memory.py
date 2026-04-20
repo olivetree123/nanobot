@@ -344,7 +344,12 @@ class MemoryStore:
 
 
 class Consolidator:
-    """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
+    """Lightweight consolidation: summarizes evicted messages into history.jsonl.
+    
+    翻译：
+    轻量级合并：将被移除的消息总结为 history.jsonl。
+    当消息长度超过上下文窗口时，将被移除的消息总结为 history.jsonl。
+    """
 
     _MAX_CONSOLIDATION_ROUNDS = 5
     _MAX_CHUNK_MESSAGES = 60  # hard cap per consolidation round
@@ -371,8 +376,7 @@ class Consolidator:
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
-            weakref.WeakValueDictionary()
-        )
+            weakref.WeakValueDictionary())
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -424,7 +428,8 @@ class Consolidator:
     ) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
         history = session.get_history(max_messages=0)
-        channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
+        channel, chat_id = (session.key.split(":", 1)
+                            if ":" in session.key else (None, None))
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -452,13 +457,18 @@ class Consolidator:
                 model=self.model,
                 messages=[
                     {
-                        "role": "system",
-                        "content": render_template(
+                        "role":
+                        "system",
+                        "content":
+                        render_template(
                             "agent/consolidator_archive.md",
                             strip=True,
                         ),
                     },
-                    {"role": "user", "content": formatted},
+                    {
+                        "role": "user",
+                        "content": formatted
+                    },
                 ],
                 tools=None,
                 tool_choice=None,
@@ -469,7 +479,8 @@ class Consolidator:
             self.store.append_history(summary)
             return summary
         except Exception:
-            logger.warning("Consolidation LLM call failed, raw-dumping to history")
+            logger.warning(
+                "Consolidation LLM call failed, raw-dumping to history")
             self.store.raw_archive(messages)
             return None
 
@@ -483,6 +494,12 @@ class Consolidator:
 
         The budget reserves space for completion tokens and a safety buffer
         so the LLM request never exceeds the context window.
+
+        根据token数量来循环归档消息，直到令牌数低于目标值。
+        预算会保留输出令牌和安全缓冲区所需要的空间，所以LLM请求永远不会超过上下文窗口大小。
+        Args:
+            session: 会话。
+            session_summary: 会话摘要。
         """
         if not session.messages or self.context_window_tokens <= 0:
             return
@@ -502,7 +519,8 @@ class Consolidator:
             if estimated <= 0:
                 return
             if estimated < budget:
-                unconsolidated_count = len(session.messages) - session.last_consolidated
+                unconsolidated_count = len(
+                    session.messages) - session.last_consolidated
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}, msgs={}",
                     session.key,
@@ -518,7 +536,8 @@ class Consolidator:
                 if estimated <= target:
                     break
 
-                boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
+                boundary = self.pick_consolidation_boundary(
+                    session, max(1, estimated - target))
                 if boundary is None:
                     logger.debug(
                         "Token consolidation: no safe boundary for {} (round {})",
@@ -564,7 +583,8 @@ class Consolidator:
                         session_summary=session_summary,
                     )
                 except Exception:
-                    logger.exception("Token estimation failed for {}", session.key)
+                    logger.exception("Token estimation failed for {}",
+                                     session.key)
                     estimated, source = 0, "error"
                 if estimated <= 0:
                     break

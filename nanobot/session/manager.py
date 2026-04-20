@@ -23,7 +23,9 @@ class Session:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
+
     last_consolidated: int = 0  # Number of messages already consolidated to files
+    """最后合并的索引，表示已经合并到文件中的消息数量。"""
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -54,8 +56,12 @@ class Session:
 
         out: list[dict[str, Any]] = []
         for message in sliced:
-            entry: dict[str, Any] = {"role": message["role"], "content": message.get("content", "")}
-            for key in ("tool_calls", "tool_call_id", "name", "reasoning_content"):
+            entry: dict[str, Any] = {
+                "role": message["role"],
+                "content": message.get("content", "")
+            }
+            for key in ("tool_calls", "tool_call_id", "name",
+                        "reasoning_content"):
                 if key in message:
                     entry[key] = message[key]
             out.append(entry)

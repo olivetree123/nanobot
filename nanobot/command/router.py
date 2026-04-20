@@ -55,6 +55,7 @@ class CommandRouter:
         self._interceptors.append(handler)
 
     def is_priority(self, text: str) -> bool:
+        """检查文本是否是优先命令。"""
         return text.strip().lower() in self._priority
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:

@@ -82,7 +82,7 @@ class _LoopHook(AgentHook):
         prev_clean = strip_think(self._stream_buf)
         self._stream_buf += delta
         new_clean = strip_think(self._stream_buf)
-        incremental = new_clean[len(prev_clean) :]
+        incremental = new_clean[len(prev_clean):]
         if incremental and self._on_stream:
             await self._on_stream(incremental)
 
@@ -98,8 +98,7 @@ class _LoopHook(AgentHook):
         if self._on_progress:
             if not self._on_stream:
                 thought = self._loop._strip_think(
-                    context.response.content if context.response else None
-                )
+                    context.response.content if context.response else None)
                 if thought:
                     await self._on_progress(thought)
             tool_hint = self._loop._strip_think(self._loop._tool_hint(context.tool_calls))
@@ -340,7 +339,11 @@ class AgentLoop:
         return format_tool_hints(tool_calls)
 
     def _effective_session_key(self, msg: InboundMessage) -> str:
-        """Return the session key used for task routing and mid-turn injections."""
+        """Return the session key used for task routing and mid-turn injections.
+        
+        翻译：
+        可以理解为获取会话id，返回用于任务路由的会话唯一标识。
+        """
         if self._unified_session and not msg.session_key_override:
             return UNIFIED_SESSION_KEY
         return msg.session_key
@@ -387,7 +390,11 @@ class AgentLoop:
             self._set_runtime_checkpoint(session, payload)
 
         async def _drain_pending(*, limit: int = _MAX_INJECTIONS_PER_TURN) -> list[dict[str, Any]]:
-            """Non-blocking drain of follow-up messages from the pending queue."""
+            """Non-blocking drain of follow-up messages from the pending queue.
+            
+            翻译：
+            从等待队列中非阻塞的提取消息。
+            """
             if pending_queue is None:
                 return []
             items: list[dict[str, Any]] = []
@@ -446,7 +453,11 @@ class AgentLoop:
         return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
 
     async def run(self) -> None:
-        """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
+        """Run the agent loop, dispatching messages as tasks to stay responsive to /stop.
+        
+        翻译：
+        运行代理循环，将消息作为任务调度，保持响应直到 /stop。
+        """
         self._running = True
         await self._connect_mcp()
         logger.info("Agent loop started")
@@ -481,6 +492,8 @@ class AgentLoop:
             # If this session already has an active pending queue (i.e. a task
             # is processing this session), route the message there for mid-turn
             # injection instead of creating a competing task.
+            # 翻译：
+            # 如果这个会话已经有一个活跃的等待队列（即一个任务正在处理这个会话），将消息路由到那里进行中间转换注入，而不是创建一个竞争任务。
             if effective_key in self._pending_queues:
                 pending_msg = msg
                 if effective_key != msg.session_key:
@@ -503,6 +516,8 @@ class AgentLoop:
                     continue
             # Compute the effective session key before dispatching
             # This ensures /stop command can find tasks correctly when unified session is enabled
+            # 翻译：
+            # 计算有效的会话键，确保在统一会话启用时，/stop 命令可以正确找到任务。
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(effective_key, []).append(task)
             task.add_done_callback(
@@ -513,7 +528,11 @@ class AgentLoop:
             )
 
     async def _dispatch(self, msg: InboundMessage) -> None:
-        """Process a message: per-session serial, cross-session concurrent."""
+        """Process a message: per-session serial, cross-session concurrent.
+        
+        翻译：
+        处理消息：按会话串行，跨会话并发。
+        """
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
@@ -522,6 +541,8 @@ class AgentLoop:
 
         # Register a pending queue so follow-up messages for this session are
         # routed here (mid-turn injection) instead of spawning a new task.
+        # 翻译：
+        # 注册一个等待队列，这样后续消息将路由到这里（中间转换注入），而不是创建一个新任务。
         pending = asyncio.Queue(maxsize=20)
         self._pending_queues[session_key] = pending
 
@@ -541,11 +562,13 @@ class AgentLoop:
                             meta = dict(msg.metadata or {})
                             meta["_stream_delta"] = True
                             meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content=delta,
-                                metadata=meta,
-                            ))
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    channel=msg.channel,
+                                    chat_id=msg.chat_id,
+                                    content=delta,
+                                    metadata=meta,
+                                ))
 
                         async def on_stream_end(*, resuming: bool = False) -> None:
                             nonlocal stream_segment
@@ -553,24 +576,30 @@ class AgentLoop:
                             meta["_stream_end"] = True
                             meta["_resuming"] = resuming
                             meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="",
-                                metadata=meta,
-                            ))
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    channel=msg.channel,
+                                    chat_id=msg.chat_id,
+                                    content="",
+                                    metadata=meta,
+                                ))
                             stream_segment += 1
 
                     response = await self._process_message(
-                        msg, on_stream=on_stream, on_stream_end=on_stream_end,
+                        msg, on_stream=on_stream, 
+                        on_stream_end=on_stream_end,
                         pending_queue=pending,
                     )
                     if response is not None:
                         await self.bus.publish_outbound(response)
                     elif msg.channel == "cli":
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata=msg.metadata or {},
-                        ))
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="",
+                                metadata=msg.metadata or {},
+                            ))
                 except asyncio.CancelledError:
                     logger.info("Task cancelled for session {}", session_key)
                     raise
@@ -666,6 +695,8 @@ class AgentLoop:
 
             # Subagent content is already in `history` above; passing it again
             # as current_message would double-project it into the prompt.
+            # 翻译：
+            # 子代理内容已经在上面添加到 `history` 中；作为 current_message 再次传递会导致在提示中重复投影。
             messages = self.context.build_messages(
                 history=history,
                 current_message="" if is_subagent else msg.content,
@@ -832,17 +863,13 @@ class AgentLoop:
                 filtered.append(block)
                 continue
 
-            if (
-                drop_runtime
-                and block.get("type") == "text"
-                and isinstance(block.get("text"), str)
-                and block["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
-            ):
+            if (drop_runtime and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)
+                    and block["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)):
                 continue
 
             if block.get("type") == "image_url" and block.get("image_url", {}).get(
-                "url", ""
-            ).startswith("data:image/"):
+                    "url", "").startswith("data:image/"):
                 path = (block.get("_meta") or {}).get("path", "")
                 filtered.append({"type": "text", "text": image_placeholder_text(path)})
                 continue
@@ -876,7 +903,8 @@ class AgentLoop:
                         continue
                     entry["content"] = filtered
             elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                if isinstance(content, str) and content.startswith(
+                        ContextBuilder._RUNTIME_CONTEXT_TAG):
                     # Strip the entire runtime-context block (including any session summary).
                     # The block is bounded by _RUNTIME_CONTEXT_TAG and _RUNTIME_CONTEXT_END.
                     end_marker = ContextBuilder._RUNTIME_CONTEXT_END
@@ -914,9 +942,8 @@ class AgentLoop:
             return False
         task_id = msg.metadata.get("subagent_task_id") if isinstance(msg.metadata, dict) else None
         if task_id and any(
-            m.get("injected_event") == "subagent_result" and m.get("subagent_task_id") == task_id
-            for m in session.messages
-        ):
+                m.get("injected_event") == "subagent_result"
+                and m.get("subagent_task_id") == task_id for m in session.messages):
             return False
         session.add_message(
             "assistant",
@@ -928,7 +955,11 @@ class AgentLoop:
         return True
 
     def _set_runtime_checkpoint(self, session: Session, payload: dict[str, Any]) -> None:
-        """Persist the latest in-flight turn state into session metadata."""
+        """Persist the latest in-flight turn state into session metadata.
+        
+        翻译：
+        将最新的进行中转换状态持久化到会话元数据中
+        """
         session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
         self.sessions.save(session)
 
@@ -981,15 +1012,13 @@ class AgentLoop:
                 continue
             tool_id = tool_call.get("id")
             name = ((tool_call.get("function") or {}).get("name")) or "tool"
-            restored_messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_id,
-                    "name": name,
-                    "content": "Error: Task interrupted before this tool finished.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
+            restored_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_id,
+                "name": name,
+                "content": "Error: Task interrupted before this tool finished.",
+                "timestamp": datetime.now().isoformat(),
+            })
 
         overlap = 0
         max_overlap = min(len(session.messages), len(restored_messages))
@@ -997,9 +1026,8 @@ class AgentLoop:
             existing = session.messages[-size:]
             restored = restored_messages[:size]
             if all(
-                self._checkpoint_message_key(left) == self._checkpoint_message_key(right)
-                for left, right in zip(existing, restored)
-            ):
+                    self._checkpoint_message_key(left) == self._checkpoint_message_key(right)
+                    for left, right in zip(existing, restored)):
                 overlap = size
                 break
         session.messages.extend(restored_messages[overlap:])
@@ -1016,13 +1044,11 @@ class AgentLoop:
             return False
 
         if session.messages and session.messages[-1].get("role") == "user":
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "content": "Error: Task interrupted before a response was generated.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
+            session.messages.append({
+                "role": "assistant",
+                "content": "Error: Task interrupted before a response was generated.",
+                "timestamp": datetime.now().isoformat(),
+            })
             session.updated_at = datetime.now()
 
         self._clear_pending_user_turn(session)
@@ -1042,8 +1068,11 @@ class AgentLoop:
         """Process a message directly and return the outbound payload."""
         await self._connect_mcp()
         msg = InboundMessage(
-            channel=channel, sender_id="user", chat_id=chat_id,
-            content=content, media=media or [],
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            media=media or [],
         )
         return await self._process_message(
             msg,
