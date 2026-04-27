@@ -352,9 +352,13 @@ class Consolidator:
     """
 
     _MAX_CONSOLIDATION_ROUNDS = 5
+    """最大合并轮次"""
+
     _MAX_CHUNK_MESSAGES = 60  # hard cap per consolidation round
+    """每轮合并的最大消息数量"""
 
     _SAFETY_BUFFER = 1024  # extra headroom for tokenizer estimation drift
+    """预留给估算误差和额外内容的安全空间"""
 
     def __init__(
         self,
@@ -372,7 +376,11 @@ class Consolidator:
         self.model = model
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
+        """模型总的上下文窗口"""
+
         self.max_completion_tokens = max_completion_tokens
+        """预留给模型回复的 token 数量，默认4096"""
+
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
@@ -387,7 +395,16 @@ class Consolidator:
         session: Session,
         tokens_to_remove: int,
     ) -> tuple[int, int] | None:
-        """Pick a user-turn boundary that removes enough old prompt tokens."""
+        """Pick a user-turn boundary that removes enough old prompt tokens.
+        
+        该方法不直接归档，只负责回答一个问题：
+        > 为了移除大约 tokens_to_remove 个 token，应该把 session.messages 从 last_consolidated 开始归档到哪个位置？
+
+        返回值是 tuple[int, int] | None：
+        - 第一个值 idx：归档结束位置，也就是后面会归档 session.messages[start:idx]
+        - 第二个值 removed_tokens：归档到这个位置大约能移除多少 token
+        - 返回None：没有可归档的消息，或者传入的 tokens_to_remove <= 0
+        """
         start = session.last_consolidated
         if start >= len(session.messages) or tokens_to_remove <= 0:
             return None
@@ -426,10 +443,17 @@ class Consolidator:
         *,
         session_summary: str | None = None,
     ) -> tuple[int, str]:
-        """Estimate current prompt size for the normal session history view."""
+        """Estimate current prompt size for the normal session history view.
+        
+        估算当前会话如果正常发给模型，整个 prompt 大概会占多少 token。
+        它不是简单统计 session.messages 的文本长度，而是走一遍真实构造 prompt 的流程。
+        """
+        # 1. 取当前会话历史。
+        # 这里会受 session.last_consolidated 等会话状态影响，所以估算的是“整理后的会话视图”，不是原始全部消息。
         history = session.get_history(max_messages=0)
         channel, chat_id = (session.key.split(":", 1)
                             if ":" in session.key else (None, None))
+        # 2. 构造一份探测用的消息列表
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -437,6 +461,7 @@ class Consolidator:
             chat_id=chat_id,
             session_summary=session_summary,
         )
+        # 3. 开始估算
         return estimate_prompt_tokens_chain(
             self.provider,
             self.model,
@@ -504,11 +529,19 @@ class Consolidator:
         if not session.messages or self.context_window_tokens <= 0:
             return
 
+        # 同一个会话可能被多个请求同时触发整理；加锁避免重复归档或覆盖
+        # last_consolidated 进度。
         lock = self.get_lock(session.key)
         async with lock:
+            # budget：本次请求允许用于 prompt 的最大 token 数。
+            # budget = 上下文窗口 - 预留输出 - 估算误差缓冲。
+            # target：整理后保留的 token 数。
+            # target 取一半，这样一旦开始整理，就尽量整理到比较宽松的状态，避免马上再次触发。
             budget = self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
             target = budget // 2
             try:
+                # 用正常构造 prompt 的方法做一次探测，估算当前会话真正会发给
+                # 模型的 token 数，而不是只看 session.messages 的原始文本。
                 estimated, source = self.estimate_session_prompt_tokens(
                     session,
                     session_summary=session_summary,
@@ -519,6 +552,7 @@ class Consolidator:
             if estimated <= 0:
                 return
             if estimated < budget:
+                # 没超过安全预算，不需要归档；日志里保留未归档消息数量，方便观察会话增长但不影响运行。
                 unconsolidated_count = len(
                     session.messages) - session.last_consolidated
                 logger.debug(
@@ -536,6 +570,7 @@ class Consolidator:
                 if estimated <= target:
                     break
 
+                # 获取归档边界，避免把一个 user/assistant 交互拆开。
                 boundary = self.pick_consolidation_boundary(
                     session, max(1, estimated - target))
                 if boundary is None:
@@ -547,6 +582,8 @@ class Consolidator:
                     break
 
                 end_idx = boundary[0]
+                # 单轮归档消息太多时，重新把边界压到 _MAX_CHUNK_MESSAGES 内，
+                # 仍然保持在 user-turn 边界上，避免一次摘要内容过长。
                 end_idx = self._cap_consolidation_boundary(session, end_idx)
                 if end_idx is None:
                     logger.debug(
@@ -556,6 +593,7 @@ class Consolidator:
                     )
                     break
 
+                # 只处理从上次归档进度到本轮边界之间的旧消息。
                 chunk = session.messages[session.last_consolidated:end_idx]
                 if not chunk:
                     break
@@ -573,11 +611,16 @@ class Consolidator:
                 if summary:
                     last_summary = summary
                 else:
+                    # archive 失败时会降级 raw_archive；这里停止继续推进进度，
+                    # 避免把未成功摘要的消息标记为已整理。
                     break
+                # 摘要成功后再推进会话进度并落盘，后续 prompt 会跳过这些旧消息。
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
 
                 try:
+                    # 归档一段后重新估算，因为 prompt 里可能还会注入摘要、
+                    # 工具定义或其他上下文，不能简单用上一轮 token 数相减。
                     estimated, source = self.estimate_session_prompt_tokens(
                         session,
                         session_summary=session_summary,
@@ -592,6 +635,8 @@ class Consolidator:
             # Persist the last summary to session metadata so it can be injected
             # into the runtime context on the next prepare_session() call, aligning
             # the summary injection strategy with AutoCompact._archive().
+            # 最后一段摘要额外保存到会话 metadata，下一次 prepare_session()
+            # 可以把它注入运行时上下文，让刚归档的内容仍然对模型可见。
             if last_summary and last_summary != "(nothing)":
                 session.metadata["_last_summary"] = {
                     "text": last_summary,

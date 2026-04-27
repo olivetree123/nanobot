@@ -39,21 +39,33 @@ class Session:
         self.updated_at = datetime.now()
 
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
-        """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
+        """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary.
+        
+        从当前 Session 里取出“适合发给 LLM 的历史消息”。
+        """
+
+        # 1. 获取未被归档的消息记录
         unconsolidated = self.messages[self.last_consolidated:]
+
+        # 2. 只保留最近 max_messages 条消息，避免历史太长
         sliced = unconsolidated[-max_messages:]
 
         # Avoid starting mid-turn when possible.
+        # 3. 尽量从 user 消息开始
         for i, message in enumerate(sliced):
             if message.get("role") == "user":
                 sliced = sliced[i:]
                 break
 
         # Drop orphan tool results at the front.
+        # 4. 去掉开头孤立的 tool result
+        # 有些模型要求工具调用消息必须成对出现：assistant 发起 tool_calls，后面才有 tool 结果。
+        # 如果历史从 tool 结果开始，就是非法结构，所以这里会修正开头位置。
         start = find_legal_message_start(sliced)
         if start:
             sliced = sliced[start:]
 
+        # 5. 只保留 LLM 需要的字段
         out: list[dict[str, Any]] = []
         for message in sliced:
             entry: dict[str, Any] = {
