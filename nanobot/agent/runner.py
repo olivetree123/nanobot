@@ -249,7 +249,8 @@ class AgentRunner:
         had_injections = False
         injection_cycles = 0
 
-        # 一次用户请求可能需要多轮模型调用：模型先请求工具，工具返回后，再把结果发回模型，直到得到最终回复或达到最大轮数。
+        # 一次用户请求可能需要多轮模型调用：模型先请求工具，工具返回后，再把结果发回模型，
+        # 模型会根据工具返回结果决定是否继续请求工具，直到得到最终回复或达到最大轮数。
         for iteration in range(spec.max_iterations):
             try:
                 # Keep the persisted conversation untouched. Context governance
