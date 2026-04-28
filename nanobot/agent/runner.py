@@ -249,8 +249,7 @@ class AgentRunner:
         had_injections = False
         injection_cycles = 0
 
-        # 一次用户请求可能需要多轮模型调用：模型先请求工具，工具返回后，
-        # 再把结果发回模型，直到得到最终回复或达到最大轮数。
+        # 一次用户请求可能需要多轮模型调用：模型先请求工具，工具返回后，再把结果发回模型，直到得到最终回复或达到最大轮数。
         for iteration in range(spec.max_iterations):
             try:
                 # Keep the persisted conversation untouched. Context governance
@@ -298,6 +297,9 @@ class AgentRunner:
             context.tool_calls = list(response.tool_calls)
             self._accumulate_usage(usage, raw_usage)
 
+            # 模型返回了工具调用，需要执行工具
+            # 工具正常执行，工具执行结果返回后，继续下一轮迭代(continue)
+            # 工具执行失败，需要检查注入消息，如果注入消息存在，继续下一轮迭代(continue)，否则结束本次运行(break)
             if response.should_execute_tools:
                 # 模型返回了合法工具调用：先把 assistant 的 tool_calls
                 # 追加到工作消息里，再执行工具。
@@ -405,6 +407,8 @@ class AgentRunner:
                 if _drained:
                     had_injections = True
                 await hook.after_iteration(context)
+
+                # 一次模型调用结束，继续下一轮迭代
                 continue
 
             if response.has_tool_calls:
@@ -485,8 +489,10 @@ class AgentRunner:
             # Check for mid-turn injections BEFORE signaling stream end.
             # If injections are found we keep the stream alive (resuming=True)
             # so streaming channels don't prematurely finalize the card.
-            # 对普通最终回复也先检查注入消息；如果有新消息插入，就不要结束，
-            # 而是把当前 assistant 回复加入历史后继续下一轮。
+            # 翻译：
+            # 对普通最终回复也先检查注入消息；
+            # - 如果有新消息注入，就不要结束，而是把当前 assistant 回复加入历史后继续下一轮；
+            # - 如果没有新消息注入，则结束for循环(break)；
             should_continue, injection_cycles = await self._try_drain_injections(
                 spec,
                 messages,
