@@ -37,16 +37,24 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
-def build_image_content_blocks(raw: bytes, mime: str, path: str, label: str) -> list[dict[str, Any]]:
+def build_image_content_blocks(raw: bytes, mime: str, path: str,
+                               label: str) -> list[dict[str, Any]]:
     """Build native image blocks plus a short text label."""
     b64 = base64.b64encode(raw).decode()
     return [
         {
             "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{b64}"},
-            "_meta": {"path": path},
+            "image_url": {
+                "url": f"data:{mime};base64,{b64}"
+            },
+            "_meta": {
+                "path": path
+            },
         },
-        {"type": "text", "text": label},
+        {
+            "type": "text",
+            "text": label
+        },
     ]
 
 
@@ -83,6 +91,7 @@ _TOOL_RESULTS_DIR = ".nanobot/tool-results"
 _TOOL_RESULT_RETENTION_SECS = 7 * 24 * 60 * 60
 _TOOL_RESULT_MAX_BUCKETS = 32
 
+
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
     return _UNSAFE_CHARS.sub("_", name).strip()
@@ -115,7 +124,7 @@ def find_legal_message_start(messages: list[dict[str, Any]]) -> int:
             if tid and str(tid) not in declared:
                 start = i + 1
                 declared.clear()
-                for prev in messages[start : i + 1]:
+                for prev in messages[start:i + 1]:
                     if prev.get("role") == "assistant":
                         for tc in prev.get("tool_calls") or []:
                             if isinstance(tc, dict) and tc.get("id"):
@@ -144,12 +153,10 @@ def _render_tool_result_reference(
     preview: str,
     truncated_preview: bool,
 ) -> str:
-    result = (
-        f"[tool output persisted]\n"
-        f"Full output saved to: {filepath}\n"
-        f"Original size: {original_size} chars\n"
-        f"Preview:\n{preview}"
-    )
+    result = (f"[tool output persisted]\n"
+              f"Full output saved to: {filepath}\n"
+              f"Original size: {original_size} chars\n"
+              f"Preview:\n{preview}")
     if truncated_preview:
         result += "\n...\n(Read the saved file if you need the full output.)"
     return result
@@ -163,11 +170,38 @@ def _bucket_mtime(path: Path) -> float:
 
 
 def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
+    """工具结果文件的垃圾回收：保留当前 session，删除过期或数量太多的其他 session 工具结果目录。
+    
+    ### 疑问
+    > 为什么要删除工具结果呢，难道不应该一直保留吗？删除了工具结果，会话历史就不完整了？
+
+    你的担心是对的：**删除工具结果文件后，会话历史里的“引用”还在，但引用指向的完整内容可能没了**。所以严格说，历史就不再是完全可重放的。
+
+    这里删除它的原因主要是工程取舍：
+    1. 工具结果可能非常大  
+    比如搜索结果、文件内容、命令输出、网页内容，长期保存会让 `.nanobot/tool-results` 越来越大。
+    2. 它不是主会话历史  
+    `session.messages` 里仍然保留了一段 preview，以及文件路径、原始大小。也就是说对话不会完全断掉，但完整工具输出不一定永久可用。
+    3. 它更像临时外溢缓存  
+    `maybe_persist_tool_result` 的目的主要是“不要把超大工具结果塞进 prompt”，不是做长期归档。所以 `_cleanup_tool_result_buckets` 会按 7 天和最多 32 个 bucket 清理。
+    所以它当前的设计是：
+    > 保留短期可追溯性，换取磁盘空间可控。
+
+    如果你的目标是“会话历史必须完整可审计/可重放”，那现在这个策略确实不够。可以考虑几种改法：
+    - 不自动删除工具结果，只由用户手动清理。
+    - 把 retention 做成配置项，比如 `tool_result_retention_days = 0` 表示永不删除。
+    - 按会话生命周期删除，比如只有删除 session 时才删除对应工具结果。
+    - 把完整工具结果写进长期 memory/archive，而不是放在临时 cache 目录。
+
+    我个人更建议做成配置项：默认保留当前策略，但允许设置为永不清理。这样既不强迫所有用户承担无限增长的磁盘成本，也能支持你这种需要完整历史的场景。"""
     siblings = [path for path in root.iterdir() if path.is_dir() and path != current_bucket]
+    # 1. 删除过期 bucket，超过 7 天没更新的会话的工具结果目录会被删掉
     cutoff = time.time() - _TOOL_RESULT_RETENTION_SECS
     for path in siblings:
         if _bucket_mtime(path) < cutoff:
             shutil.rmtree(path, ignore_errors=True)
+    # 2. 控制 bucket 总数
+    # _TOOL_RESULT_MAX_BUCKETS 是 32。因为当前 bucket 一定要保留，所以其他 sibling 最多保留 31 个。超过的旧目录会按修改时间删掉。
     keep = max(_TOOL_RESULT_MAX_BUCKETS - 1, 0)
     siblings = [path for path in siblings if path.exists()]
     if len(siblings) <= keep:
@@ -195,7 +229,29 @@ def maybe_persist_tool_result(
     *,
     max_chars: int,
 ) -> Any:
-    """Persist oversized tool output and replace it with a stable reference string."""
+    """Persist oversized tool output and replace it with a stable reference string.
+    
+    当工具返回结果太大时，把完整结果保存到文件里，然后把发给模型的工具结果替换成一个“引用 + 预览”。
+
+    返回结果示例：
+    ```text
+    [tool output persisted]
+    Full output saved to: ...
+    Original size: ... chars
+    Preview:
+    ...
+    (Read the saved file if you need the full output.)
+    ```
+    
+    Args:
+        workspace: 工作区路径
+        session_key: 会话键
+        tool_call_id: 工具调用 ID
+        content: 工具结果
+        max_chars: 最大字符数，超过这个字符数就会被改写成一个“引用 + 预览”
+    Returns:
+        Any: 工具结果，如果超过最大字符数，则返回“引用 + 预览”
+    """
     if workspace is None or max_chars <= 0:
         return content
 
@@ -214,9 +270,11 @@ def maybe_persist_tool_result(
     if len(text_payload) <= max_chars:
         return content
 
+    # 把完整结果保存到文件里`${workspace}/.nanobot/tool-results/${session_key}/${tool_call_id}.${suffix}`
     root = ensure_dir(workspace / _TOOL_RESULTS_DIR)
     bucket = ensure_dir(root / safe_filename(session_key or "default"))
     try:
+        # 工具结果文件的垃圾回收
         _cleanup_tool_result_buckets(root, bucket)
     except Exception as exc:
         logger.warning("Failed to clean stale tool result buckets in {}: {}", root, exc)
@@ -411,11 +469,8 @@ def build_status_content(
                            it is appended as an extra section.
     """
     uptime_s = int(time.time() - start_time)
-    uptime = (
-        f"{uptime_s // 3600}h {(uptime_s % 3600) // 60}m"
-        if uptime_s >= 3600
-        else f"{uptime_s // 60}m {uptime_s % 60}s"
-    )
+    uptime = (f"{uptime_s // 3600}h {(uptime_s % 3600) // 60}m"
+              if uptime_s >= 3600 else f"{uptime_s // 60}m {uptime_s % 60}s")
     last_in = last_usage.get("prompt_tokens", 0)
     last_out = last_usage.get("completion_tokens", 0)
     cached = last_usage.get("cached_tokens", 0)
@@ -423,7 +478,8 @@ def build_status_content(
     # Budget mirrors Consolidator formula: ctx_window - max_completion - _SAFETY_BUFFER
     ctx_budget = max(ctx_total - int(max_completion_tokens) - 1024, 1)
     ctx_pct = min(int((context_tokens_estimate / ctx_budget) * 100), 999) if ctx_budget > 0 else 0
-    ctx_used_str = f"{context_tokens_estimate // 1000}k" if context_tokens_estimate >= 1000 else str(context_tokens_estimate)
+    ctx_used_str = f"{context_tokens_estimate // 1000}k" if context_tokens_estimate >= 1000 else str(
+        context_tokens_estimate)
     ctx_total_str = f"{ctx_total // 1000}k" if ctx_total > 0 else "n/a"
     token_line = f"\U0001f4ca Tokens: {last_in} in / {last_out} out"
     if cached and last_in:
@@ -439,7 +495,7 @@ def build_status_content(
     ]
     if search_usage_text:
         lines.append(search_usage_text)
-    return "\n".join(lines)    
+    return "\n".join(lines)
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
@@ -477,7 +533,9 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     try:
         from nanobot.utils.gitstore import GitStore
         gs = GitStore(workspace, tracked_files=[
-            "SOUL.md", "USER.md", "memory/MEMORY.md",
+            "SOUL.md",
+            "USER.md",
+            "memory/MEMORY.md",
         ])
         gs.init()
     except Exception:

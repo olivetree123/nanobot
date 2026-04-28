@@ -45,7 +45,6 @@ if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig, ToolsConfig, WebToolsConfig
     from nanobot.cron.service import CronService
 
-
 UNIFIED_SESSION_KEY = "unified:default"
 
 
@@ -170,20 +169,13 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
-        self.max_iterations = (
-            max_iterations if max_iterations is not None else defaults.max_tool_iterations
-        )
-        self.context_window_tokens = (
-            context_window_tokens
-            if context_window_tokens is not None
-            else defaults.context_window_tokens
-        )
+        self.max_iterations = (max_iterations
+                               if max_iterations is not None else defaults.max_tool_iterations)
+        self.context_window_tokens = (context_window_tokens if context_window_tokens is not None
+                                      else defaults.context_window_tokens)
         self.context_block_limit = context_block_limit
-        self.max_tool_result_chars = (
-            max_tool_result_chars
-            if max_tool_result_chars is not None
-            else defaults.max_tool_result_chars
-        )
+        self.max_tool_result_chars = (max_tool_result_chars if max_tool_result_chars is not None
+                                      else defaults.max_tool_result_chars)
         self.provider_retry_mode = provider_retry_mode
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
@@ -193,7 +185,9 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
-        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
+        self.context = ContextBuilder(workspace,
+                                      timezone=timezone,
+                                      disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
@@ -223,9 +217,8 @@ class AgentLoop:
         self._pending_queues: dict[str, asyncio.Queue] = {}
         # NANOBOT_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
         _max = int(os.environ.get("NANOBOT_MAX_CONCURRENT_REQUESTS", "3"))
-        self._concurrency_gate: asyncio.Semaphore | None = (
-            asyncio.Semaphore(_max) if _max > 0 else None
-        )
+        self._concurrency_gate: asyncio.Semaphore | None = (asyncio.Semaphore(_max)
+                                                            if _max > 0 else None)
         self.consolidator = Consolidator(
             store=self.context.memory,
             provider=provider,
@@ -256,15 +249,13 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dir = (
-            self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
-        )
+        allowed_dir = (self.workspace if
+                       (self.restrict_to_workspace or self.exec_config.sandbox) else None)
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
         self.tools.register(
-            ReadFileTool(
-                workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read
-            )
-        )
+            ReadFileTool(workspace=self.workspace,
+                         allowed_dir=allowed_dir,
+                         extra_allowed_dirs=extra_read))
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
         for cls in (GlobTool, GrepTool):
@@ -279,19 +270,16 @@ class AgentLoop:
                     sandbox=self.exec_config.sandbox,
                     path_append=self.exec_config.path_append,
                     allowed_env_keys=self.exec_config.allowed_env_keys,
-                )
-            )
+                ))
         if self.web_config.enable:
             self.tools.register(
-                WebSearchTool(config=self.web_config.search, proxy=self.web_config.proxy)
-            )
+                WebSearchTool(config=self.web_config.search, proxy=self.web_config.proxy))
             self.tools.register(WebFetchTool(proxy=self.web_config.proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(
-                CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
-            )
+                CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC"))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -320,7 +308,8 @@ class AgentLoop:
         for name in ("message", "spawn", "cron", "my"):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
-                    tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+                    tool.set_context(channel, chat_id,
+                                     *([message_id] if name == "message" else []))
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -380,9 +369,8 @@ class AgentLoop:
             chat_id=chat_id,
             message_id=message_id,
         )
-        hook: AgentHook = (
-            CompositeHook([loop_hook] + self._extra_hooks) if self._extra_hooks else loop_hook
-        )
+        hook: AgentHook = (CompositeHook([loop_hook] +
+                                         self._extra_hooks) if self._extra_hooks else loop_hook)
 
         async def _checkpoint(payload: dict[str, Any]) -> None:
             if session is None:
@@ -421,25 +409,26 @@ class AgentLoop:
                 items.append({"role": "user", "content": merged})
             return items
 
-        result = await self.runner.run(AgentRunSpec(
-            initial_messages=initial_messages,
-            tools=self.tools,
-            model=self.model,
-            max_iterations=self.max_iterations,
-            max_tool_result_chars=self.max_tool_result_chars,
-            hook=hook,
-            error_message="Sorry, I encountered an error calling the AI model.",
-            concurrent_tools=True,
-            workspace=self.workspace,
-            session_key=session.key if session else None,
-            context_window_tokens=self.context_window_tokens,
-            context_block_limit=self.context_block_limit,
-            provider_retry_mode=self.provider_retry_mode,
-            progress_callback=on_progress,
-            retry_wait_callback=on_retry_wait,
-            checkpoint_callback=_checkpoint,
-            injection_callback=_drain_pending,
-        ))
+        result = await self.runner.run(
+            AgentRunSpec(
+                initial_messages=initial_messages,
+                tools=self.tools,
+                model=self.model,
+                max_iterations=self.max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                hook=hook,
+                error_message="Sorry, I encountered an error calling the AI model.",
+                concurrent_tools=True,
+                workspace=self.workspace,
+                session_key=session.key if session else None,
+                context_window_tokens=self.context_window_tokens,
+                context_block_limit=self.context_block_limit,
+                provider_retry_mode=self.provider_retry_mode,
+                progress_callback=on_progress,
+                retry_wait_callback=on_retry_wait,
+                checkpoint_callback=_checkpoint,
+                injection_callback=_drain_pending,
+            ))
         self._last_usage = result.usage
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
@@ -483,7 +472,11 @@ class AgentLoop:
 
             raw = msg.content.strip()
             if self.commands.is_priority(raw):
-                ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw=raw, loop=self)
+                ctx = CommandContext(msg=msg,
+                                     session=None,
+                                     key=msg.session_key,
+                                     raw=raw,
+                                     loop=self)
                 result = await self.commands.dispatch_priority(ctx)
                 if result:
                     await self.bus.publish_outbound(result)
@@ -520,12 +513,8 @@ class AgentLoop:
             # 计算有效的会话键，确保在统一会话启用时，/stop 命令可以正确找到任务。
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(effective_key, []).append(task)
-            task.add_done_callback(
-                lambda t, k=effective_key: self._active_tasks.get(k, [])
-                and self._active_tasks[k].remove(t)
-                if t in self._active_tasks.get(k, [])
-                else None
-            )
+            task.add_done_callback(lambda t, k=effective_key: self._active_tasks.get(k, [
+            ]) and self._active_tasks[k].remove(t) if t in self._active_tasks.get(k, []) else None)
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message: per-session serial, cross-session concurrent.
@@ -586,7 +575,8 @@ class AgentLoop:
                             stream_segment += 1
 
                     response = await self._process_message(
-                        msg, on_stream=on_stream, 
+                        msg,
+                        on_stream=on_stream,
                         on_stream_end=on_stream_end,
                         pending_queue=pending,
                     )
@@ -605,10 +595,12 @@ class AgentLoop:
                     raise
                 except Exception:
                     logger.exception("Error processing message for session {}", session_key)
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    ))
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="Sorry, I encountered an error.",
+                        ))
         finally:
             # Drain any messages still in the pending queue and re-publish
             # them to the bus so they are processed as fresh inbound messages
@@ -626,7 +618,8 @@ class AgentLoop:
                 if leftover:
                     logger.info(
                         "Re-published {} leftover message(s) to bus for session {}",
-                        leftover, session_key,
+                        leftover,
+                        session_key,
                     )
 
     async def close_mcp(self) -> None:
@@ -664,17 +657,21 @@ class AgentLoop:
         """Process a single inbound message and return the response."""
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
-            channel, chat_id = (
-                msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
-            )
+            # system 消息通常来自后台任务或子代理，真实目标会话编码在
+            # chat_id 里；先还原 channel/chat_id，后续才能写回正确会话。
+            channel, chat_id = (msg.chat_id.split(":", 1) if ":" in msg.chat_id else
+                                ("cli", msg.chat_id))
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
+            # 从中断状态中恢复，参考`笔记/21.md`
             if self._restore_runtime_checkpoint(session):
                 self.sessions.save(session)
             if self._restore_pending_user_turn(session):
                 self.sessions.save(session)
 
+            # 进入模型前先做自动压缩和 token 触发的轻量归档，
+            # 保证即将构造的 prompt 不会带上过长的历史。
             session, pending = self.auto_compact.prepare_session(session, key)
 
             await self.consolidator.maybe_consolidate_by_tokens(
@@ -706,12 +703,18 @@ class AgentLoop:
                 current_role=current_role,
             )
             final_content, _, all_msgs, _, _ = await self._run_agent_loop(
-                messages, session=session, channel=channel, chat_id=chat_id,
+                messages,
+                session=session,
+                channel=channel,
+                chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
             )
+            # all_msgs 是本轮真实发给/收到模型的消息链；保存时跳过 prompt
+            # 中已有的历史和当前输入，只持久化本轮新增的 assistant/tool 内容。
             self._save_turn(session, all_msgs, 1 + len(history))
             self._clear_runtime_checkpoint(session)
             self.sessions.save(session)
+            # 当前回复已经可以返回给调用方，归档整理放到后台收尾，避免阻塞响应。
             self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
             return OutboundMessage(
                 channel=channel,
@@ -735,6 +738,8 @@ class AgentLoop:
         if self._restore_pending_user_turn(session):
             self.sessions.save(session)
 
+        # 恢复后先压缩历史，再处理命令和普通对话；
+        # pending 是本次需要注入 prompt 的会话摘要。
         session, pending = self.auto_compact.prepare_session(session, key)
 
         # Slash commands
@@ -751,10 +756,14 @@ class AgentLoop:
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
+                # MessageTool 会直接向用户发消息；start_turn 用来判断本轮
+                # 是否已经产生过用户可见输出。
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
 
+        # 构造真正发给模型的初始 prompt：未归档历史 + 当前用户消息 +
+        # 可选摘要/媒体/会话上下文。
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -774,8 +783,7 @@ class AgentLoop:
                     chat_id=msg.chat_id,
                     content=content,
                     metadata=meta,
-                )
-            )
+                ))
 
         async def _on_retry_wait(content: str) -> None:
             meta = dict(msg.metadata or {})
@@ -786,8 +794,7 @@ class AgentLoop:
                     chat_id=msg.chat_id,
                     content=content,
                     metadata=meta,
-                )
-            )
+                ))
 
         # Persist the triggering user message immediately, before running the
         # agent loop. If the process is killed mid-turn (OOM, SIGKILL, self-
@@ -798,10 +805,14 @@ class AgentLoop:
         user_persisted_early = False
         if isinstance(msg.content, str) and msg.content.strip():
             session.add_message("user", msg.content)
+            # 将会话标记为“已接收到用户消息，但还没回复”
             self._mark_pending_user_turn(session)
+            # 保存会话，确保用户消息被持久化
             self.sessions.save(session)
             user_persisted_early = True
 
+        # 运行核心 agent 循环：模型可能多轮调用工具、流式输出，
+        # 最终返回用户可见文本以及完整消息链。
         final_content, _, all_msgs, stop_reason, had_injections = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
@@ -819,11 +830,13 @@ class AgentLoop:
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
         # Skip the already-persisted user message when saving the turn
+        # 如果用户消息已提前落盘，这里要额外跳过它，避免重复写入历史。
         save_skip = 1 + len(history) + (1 if user_persisted_early else 0)
         self._save_turn(session, all_msgs, save_skip)
         self._clear_pending_user_turn(session)
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
+        # 成功保存本轮会话后，后台再尝试按 token 预算整理历史。
         self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
 
         # When follow-up messages were injected mid-turn, a later natural
@@ -986,7 +999,36 @@ class AgentLoop:
         )
 
     def _restore_runtime_checkpoint(self, session: Session) -> bool:
-        """Materialize an unfinished turn into session history before a new request."""
+        """Materialize an unfinished turn into session history before a new request.
+        
+        ### 翻译
+        在发出新请求之前，将未完成的会话历史记录具体化。
+        
+        如果会话元数据中没有 `runtime_checkpoint` 标记，返回 False。
+        如果会话元数据中的 `runtime_checkpoint` 标记是字典，则将其转换为普通历史消息：
+        ```json
+        {
+            "role": "assistant",
+            "content": "Error: Task interrupted before a response was generated.",
+            "timestamp": datetime.now().isoformat(),
+        }
+        ```
+
+        ### 函数功能说明：
+        agent 已经跑到中途了，比如模型已经产生了 assistant 消息、已经完成了一些工具调用，还有一些工具调用没完成。
+        代码会把这些“进行中的状态”临时存到 session.metadata["runtime_checkpoint"]。
+        如果进程中断，下次启动时 `_restore_runtime_checkpoint` 会把它还原成普通历史消息：
+        - 已生成的 assistant 消息写回历史
+        - 已完成的 tool result 写回历史
+        - 未完成的 tool call 补一条错误结果：`Task interrupted before this tool finished.`
+
+        ### 为什么会中断
+        - 进程 OOM，被系统杀掉
+        - 收到 SIGKILL
+        - 程序自重启
+        - 用户执行 stop / 重启 agent
+        - 工具调用或模型调用过程中服务异常退出
+        """
         from datetime import datetime
 
         checkpoint = session.metadata.get(self._RUNTIME_CHECKPOINT_KEY)
@@ -1037,7 +1079,36 @@ class AgentLoop:
         return True
 
     def _restore_pending_user_turn(self, session: Session) -> bool:
-        """Close a turn that only persisted the user message before crashing."""
+        """Close a turn that only persisted the user message before crashing.
+        
+        ### 翻译
+        关闭一个在崩溃前只持久化用户消息的回合。
+        
+        如果会话元数据中没有 `pending_user_turn` 标记，返回 False。
+        如果会话消息列表的最后一项是 `user`，则添加一条 `assistant` 消息：
+        ```json
+        {
+            "role": "assistant",
+            "content": "Error: Task interrupted before a response was generated.",
+            "timestamp": datetime.now().isoformat(),
+        }
+        ```
+
+        ### 函数功能说明
+        用户消息已经提前保存了，但 agent 还没来得及生成回复就中断。
+        下次恢复时，如果发现最后一条还是 user，就补一条 assistant 错误消息：
+        ```text
+        Error: Task interrupted before a response was generated.
+        ```
+        这样做是为了避免会话历史停在“用户问了，但永远没有回答”的半截状态。
+
+        ### 为什么会中断
+        - 进程 OOM，被系统杀掉
+        - 收到 SIGKILL
+        - 程序自重启
+        - 用户执行 stop / 重启 agent
+        - 工具调用或模型调用过程中服务异常退出
+        """
         from datetime import datetime
 
         if not session.metadata.get(self._PENDING_USER_TURN_KEY):

@@ -29,12 +29,7 @@ class Session:
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
-        msg = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            **kwargs
-        }
+        msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
@@ -72,8 +67,7 @@ class Session:
                 "role": message["role"],
                 "content": message.get("content", "")
             }
-            for key in ("tool_calls", "tool_call_id", "name",
-                        "reasoning_content"):
+            for key in ("tool_calls", "tool_call_id", "name", "reasoning_content"):
                 if key in message:
                     entry[key] = message[key]
             out.append(entry)
@@ -142,6 +136,8 @@ class SessionManager:
         """
         Get an existing session or create a new one.
 
+        从缓存或磁盘加载，不存在则创建
+
         Args:
             key: Session key (usually channel:chat_id).
 
@@ -190,25 +186,26 @@ class SessionManager:
 
                     if data.get("_type") == "metadata":
                         metadata = data.get("metadata", {})
-                        created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
-                        updated_at = datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None
+                        created_at = datetime.fromisoformat(
+                            data["created_at"]) if data.get("created_at") else None
+                        updated_at = datetime.fromisoformat(
+                            data["updated_at"]) if data.get("updated_at") else None
                         last_consolidated = data.get("last_consolidated", 0)
                     else:
                         messages.append(data)
 
-            return Session(
-                key=key,
-                messages=messages,
-                created_at=created_at or datetime.now(),
-                updated_at=updated_at or datetime.now(),
-                metadata=metadata,
-                last_consolidated=last_consolidated
-            )
+            return Session(key=key,
+                           messages=messages,
+                           created_at=created_at or datetime.now(),
+                           updated_at=updated_at or datetime.now(),
+                           metadata=metadata,
+                           last_consolidated=last_consolidated)
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
             repaired = self._repair(key)
             if repaired is not None:
-                logger.info("Recovered session {} from corrupt file ({} messages)", key, len(repaired.messages))
+                logger.info("Recovered session {} from corrupt file ({} messages)", key,
+                            len(repaired.messages))
             return repaired
 
     def _repair(self, key: str) -> Session | None:
@@ -258,14 +255,12 @@ class SessionManager:
             if not messages and not metadata:
                 return None
 
-            return Session(
-                key=key,
-                messages=messages,
-                created_at=created_at or datetime.now(),
-                updated_at=updated_at or datetime.now(),
-                metadata=metadata,
-                last_consolidated=last_consolidated
-            )
+            return Session(key=key,
+                           messages=messages,
+                           created_at=created_at or datetime.now(),
+                           updated_at=updated_at or datetime.now(),
+                           metadata=metadata,
+                           last_consolidated=last_consolidated)
         except Exception as e:
             logger.warning("Repair failed for session {}: {}", key, e)
             return None
@@ -281,7 +276,11 @@ class SessionManager:
         }
 
     def save(self, session: Session) -> None:
-        """Save a session to disk atomically."""
+        """Save a session to disk atomically.
+        
+        保存会话到磁盘，原子操作，防止写入中途崩溃导致文件损坏。
+        先写临时文件，再用 os.replace() 原子替换，防止写入中途崩溃导致文件损坏
+        """
         path = self._get_session_path(session.key)
         tmp_path = path.with_suffix(".jsonl.tmp")
 
@@ -372,6 +371,8 @@ class SessionManager:
     def list_sessions(self) -> list[dict[str, Any]]:
         """
         List all sessions.
+        
+        扫描 sessions 目录，只读第一行元数据，按 updated_at 倒序返回
 
         Returns:
             List of session info dicts.
